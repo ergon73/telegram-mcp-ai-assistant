@@ -101,33 +101,49 @@ def add_to_context(user_id: int, role: str, content: str) -> None:
         context.pop(0)
 
 
-def format_product_list(products: List[Dict[str, Any]]) -> str:
+def format_product_list(products: List[Dict[str, Any]], max_chars: int = 4000) -> List[str]:
     """
     Форматирует список игр для отображения пользователю.
+    Разбивает длинные списки на несколько сообщений.
     
     Args:
         products: Список словарей с данными игр
+        max_chars: Максимальная длина одного сообщения (по умолчанию 4000)
         
     Returns:
-        str: Отформатированная строка со списком игр
+        List[str]: Список отформатированных сообщений
     """
     if not products:
-        return "Игры не найдены."
+        return ["Игры не найдены."]
     
-    if len(products) > 20:
-        products = products[:20]
-        message = f"Найдено игр: {len(products)} (показаны первые 20)\n\n"
-    else:
-        message = f"Найдено игр: {len(products)}\n\n"
+    total_count = len(products)
+    messages = []
+    current_message = f"Найдено игр: {total_count}\n\n"
+    current_length = len(current_message)
     
-    for product in products:
+    for idx, product in enumerate(products, 1):
         featured_mark = "⭐ " if product.get("is_featured") else "🎮 "
-        message += f"{featured_mark}{product['name']}\n"
-        message += f"   Платформа: {product['platform']}\n"
-        message += f"   Жанр: {product['category']}\n"
-        message += f"   Цена: {product['price']} ₽\n\n"
+        product_text = (
+            f"{featured_mark}{product['name']}\n"
+            f"   Платформа: {product['platform']}\n"
+            f"   Жанр: {product['category']}\n"
+            f"   Цена: {product['price']} ₽\n\n"
+        )
+        
+        # Если добавление следующей игры превысит лимит, сохраняем текущее сообщение
+        if current_length + len(product_text) > max_chars and current_message != f"Найдено игр: {total_count}\n\n":
+            messages.append(current_message.strip())
+            current_message = f"Найдено игр: {total_count} (продолжение, игры {idx}-{total_count}):\n\n"
+            current_length = len(current_message)
+        
+        current_message += product_text
+        current_length += len(product_text)
     
-    return message.strip()
+    # Добавляем последнее сообщение
+    if current_message.strip():
+        messages.append(current_message.strip())
+    
+    return messages if messages else [f"Найдено игр: {total_count}\n\n(список пуст)"]
 
 
 async def call_openai(user_message: str, user_id: int) -> str:
@@ -173,19 +189,51 @@ def parse_json_response(text: str) -> Optional[Dict[str, Any]]:
     Returns:
         Optional[Dict]: Распарсенный JSON или None
     """
-    # Пытаемся найти JSON объект в тексте
-    json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group(0))
-        except json.JSONDecodeError:
-            pass
-    
-    # Если не нашли, пытаемся распарсить весь текст как JSON
+    # Удаляем markdown код блоки, если они есть
     text = text.strip()
+    if "```json" in text:
+        # Извлекаем JSON из markdown блока
+        start = text.find("```json") + 7
+        end = text.find("```", start)
+        if end != -1:
+            text = text[start:end].strip()
+    elif "```" in text:
+        # Извлекаем из обычного markdown блока
+        start = text.find("```") + 3
+        end = text.find("```", start)
+        if end != -1:
+            text = text[start:end].strip()
+    
+    # Сначала пытаемся распарсить весь текст как JSON
     if text.startswith("{") and text.endswith("}"):
         try:
             return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+    
+    # Если не получилось, ищем JSON объект в тексте
+    # Используем более умный поиск с подсчетом скобок
+    start_idx = text.find("{")
+    if start_idx != -1:
+        bracket_count = 0
+        for i in range(start_idx, len(text)):
+            if text[i] == "{":
+                bracket_count += 1
+            elif text[i] == "}":
+                bracket_count -= 1
+                if bracket_count == 0:
+                    # Нашли полный JSON объект
+                    json_str = text[start_idx:i+1]
+                    try:
+                        return json.loads(json_str)
+                    except json.JSONDecodeError:
+                        break
+    
+    # Если ничего не нашли, пытаемся найти JSON с помощью regex (для простых случаев)
+    json_match = re.search(r'\{[^{}]*\}', text)
+    if json_match:
+        try:
+            return json.loads(json_match.group(0))
         except json.JSONDecodeError:
             pass
     
@@ -212,10 +260,22 @@ async def process_user_message(message: Message) -> None:
     # Получаем ответ от GPT-4
     gpt_response = await call_openai(user_text, user_id)
     
+    # Отладочный вывод (можно убрать в продакшене)
+    print(f"[DEBUG] GPT Response: {gpt_response[:200]}")
+    
     # Парсим ответ
     tool_call = parse_json_response(gpt_response)
     
+    # Если ответ похож на JSON, но не распарсился - пытаемся еще раз
+    if not tool_call and gpt_response.strip().startswith("{") and "tool" in gpt_response:
+        # Попробуем еще раз с другим подходом
+        try:
+            tool_call = json.loads(gpt_response.strip())
+        except json.JSONDecodeError:
+            pass
+    
     if tool_call and "tool" in tool_call:
+        print(f"[DEBUG] Parsed tool call: {tool_call}")
         # Это вызов инструмента
         tool_name = tool_call["tool"]
         arguments = tool_call.get("arguments", {})
@@ -229,8 +289,22 @@ async def process_user_message(message: Message) -> None:
             # Форматируем результат
             if isinstance(tool_result, list) and tool_result:
                 # Это список игр
-                if isinstance(tool_result[0], dict) and "name" in tool_result[0]:
-                    formatted_result = format_product_list(tool_result)
+                if tool_result and isinstance(tool_result[0], dict) and "name" in tool_result[0]:
+                    formatted_messages = format_product_list(tool_result)
+                    # Отправляем все части списка (даже если одна)
+                    for msg_part in formatted_messages:
+                        await message.answer(msg_part)
+                    
+                    # Добавляем в контекст информацию о списке
+                    if len(formatted_messages) > 1:
+                        context_message = f"Найдено игр: {len(tool_result)}. Список отправлен в {len(formatted_messages)} частях."
+                    else:
+                        context_message = formatted_messages[0]
+                    
+                    add_to_context(user_id, "assistant", context_message)
+                    
+                    # Для списков не отправляем финальный ответ от GPT-4, список уже отправлен
+                    return
                 else:
                     formatted_result = str(tool_result)
             elif isinstance(tool_result, dict):
@@ -244,18 +318,29 @@ async def process_user_message(message: Message) -> None:
                         f"Жанр: {product['category']}\n"
                         f"Цена: {product['price']} ₽"
                     )
+                    # Отправляем информацию об одной игре сразу
+                    await message.answer(formatted_result)
+                    add_to_context(user_id, "assistant", formatted_result)
+                    return
                 else:
                     formatted_result = str(tool_result)
             else:
                 # Это простое значение (например, результат вычисления)
                 formatted_result = str(tool_result)
             
+            # Для остальных типов результатов (не списки и не одна игра) отправляем как обычно
             # Добавляем результат в контекст
             add_to_context(user_id, "assistant", formatted_result)
             
             # Просим GPT-4 сформулировать финальный ответ
-            final_prompt = f"Пользователь спросил: {user_text}\n\nРезультат выполнения инструмента:\n{formatted_result}\n\nСформулируй дружелюбный ответ пользователю на русском языке."
+            final_prompt = f"Пользователь спросил: {user_text}\n\nРезультат выполнения инструмента:\n{formatted_result[:2000]}\n\nСформулируй дружелюбный ответ пользователю на русском языке."
             final_response = await call_openai(final_prompt, user_id)
+            
+            # Проверяем, что финальный ответ не JSON
+            final_tool_call = parse_json_response(final_response)
+            if final_tool_call and "tool" in final_tool_call:
+                # Если GPT вернул еще один JSON, просто отправляем отформатированный результат
+                final_response = formatted_result
             
             # Добавляем финальный ответ в контекст
             add_to_context(user_id, "assistant", final_response)
@@ -269,8 +354,15 @@ async def process_user_message(message: Message) -> None:
             await message.answer(response)
     else:
         # Обычный текстовый ответ
-        add_to_context(user_id, "assistant", gpt_response)
-        await message.answer(gpt_response)
+        # Проверяем, что это не JSON
+        if gpt_response.strip().startswith("{") and gpt_response.strip().endswith("}"):
+            # Это похоже на JSON, который не распарсился - отправляем сообщение об ошибке
+            response = "Извините, не удалось обработать ваш запрос. Попробуйте переформулировать вопрос."
+            add_to_context(user_id, "assistant", response)
+            await message.answer(response)
+        else:
+            add_to_context(user_id, "assistant", gpt_response)
+            await message.answer(gpt_response)
 
 
 @dp.message(Command("start"))

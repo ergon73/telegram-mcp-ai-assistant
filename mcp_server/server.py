@@ -2,6 +2,7 @@
 FastAPI сервер для MCP (Model Context Protocol).
 Предоставляет HTTP API для работы с инструментами каталога игр.
 """
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,7 +12,23 @@ import db
 from simpleeval import simple_eval
 
 
-app = FastAPI(title="MCP Game Store Server", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Управление жизненным циклом приложения.
+    Инициализирует БД при запуске сервера.
+    """
+    # Startup: инициализация БД
+    db.init_db()
+    yield
+    # Shutdown: можно добавить закрытие соединений, если нужно
+
+
+app = FastAPI(
+    title="MCP Game Store Server",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 # CORS для возможности обращения с любого домена
 app.add_middleware(
@@ -34,12 +51,6 @@ class CallToolResponse(BaseModel):
     ok: bool
     result: Optional[Any] = None
     error: Optional[str] = None
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Инициализация БД при запуске сервера."""
-    db.init_db()
 
 
 @app.get("/")

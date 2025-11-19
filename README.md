@@ -202,8 +202,6 @@ telegram-mcp-ai-assistant/
 ├── .cursorrules              # Правила для Cursor IDE
 ├── .env.example              # Шаблон переменных окружения
 ├── .gitignore
-├── CALCULATOR_TESTS.md      # Тесты для калькулятора
-├── TEST_QUESTIONS.md         # Тестовые вопросы для бота
 │
 ├── mcp_server/               # MCP-сервер (FastAPI)
 │   ├── server.py             # HTTP API эндпоинты
@@ -254,8 +252,6 @@ telegram-mcp-ai-assistant/
 - ✅ Ограничение размера чисел в выражении (максимум 10 цифр)
 - ✅ Ограничение результата (максимум 10^15 для float, 10^100 для int)
 - ✅ Обработка ошибок сериализации JSON (Python 3.13+)
-
-Подробные тесты: [CALCULATOR_TESTS.md](CALCULATOR_TESTS.md)
 
 ---
 

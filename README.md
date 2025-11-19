@@ -323,8 +323,7 @@ telegram-mcp-ai-assistant/
 
 **Georgy**
 
-- 📧 Email: [your-email@example.com]
-- 💼 LinkedIn: [your-linkedin]
+- 📧 Email: georgy.belyanin@gmail.com
 - 🐙 GitHub: [@ergon73](https://github.com/ergon73)
 
 ---
